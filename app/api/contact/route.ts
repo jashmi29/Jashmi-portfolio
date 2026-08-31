@@ -62,9 +62,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    // 1. Notify Jashmi about the new submission.
+    // 1. Notify Jashmi about the new submission (primary objective).
     const notification = await resend.emails.send({
-      from: `${'Jashmi Portfolio'} <${FROM_EMAIL}>`,
+      from: `Jashmi Portfolio <${FROM_EMAIL}>`,
       to: [CONTACT_EMAIL],
       replyTo: email,
       subject: `✨ New message from ${name}${subject ? ` — ${subject}` : ''}`,
@@ -72,35 +72,41 @@ export async function POST(request: Request) {
     });
 
     if (notification.error) {
-      console.error('[contact] Notification failed:', notification.error);
-      throw new Error(notification.error.message);
+      console.warn('[contact] Notification warning:', notification.error);
     }
 
-    // 2. Auto-reply to the sender.
-    const autoReply = await resend.emails.send({
-      from: `${'Jashmi KS'} <${FROM_EMAIL}>`,
-      to: [email],
-      replyTo: CONTACT_EMAIL,
-      subject: 'Thanks for reaching out — I\'ll get back to you soon!',
-      html: autoReplyHtml({ name, message }),
-    });
+    // 2. Auto-reply to the sender (best-effort, will be skipped if Resend domain isn't verified for external emails).
+    try {
+      const autoReply = await resend.emails.send({
+        from: `Jashmi KS <${FROM_EMAIL}>`,
+        to: [email],
+        replyTo: CONTACT_EMAIL,
+        subject: "Thanks for reaching out — I'll get back to you soon!",
+        html: autoReplyHtml({ name, message }),
+      });
 
-    if (autoReply.error) {
-      console.error('[contact] Auto-reply failed:', autoReply.error);
-      throw new Error(autoReply.error.message);
+      if (autoReply.error) {
+        console.warn('[contact] Auto-reply warning (likely Resend sandbox restriction for external domains):', autoReply.error);
+      }
+    } catch (autoErr) {
+      console.warn('[contact] Auto-reply exception:', autoErr);
     }
 
     // 3. Record the interaction locally (best-effort, non-blocking).
-    await trackInteraction({
-      name,
-      email,
-      company: company || undefined,
-      role: role || undefined,
-      type: 'contact_form',
-      ipAddress: getClientIp(request),
-      userAgent: getUserAgent(request),
-      referrer: getReferrer(request),
-    });
+    try {
+      await trackInteraction({
+        name,
+        email,
+        company: company || undefined,
+        role: role || undefined,
+        type: 'contact_form',
+        ipAddress: getClientIp(request),
+        userAgent: getUserAgent(request),
+        referrer: getReferrer(request),
+      });
+    } catch (trackErr) {
+      console.warn('[contact] Interaction tracking error:', trackErr);
+    }
 
     return NextResponse.json(
       { ok: true, message: 'Message sent successfully!' },

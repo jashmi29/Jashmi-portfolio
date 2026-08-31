@@ -13,6 +13,7 @@ import {
   Code2,
   Palette,
   X,
+  Download,
 } from 'lucide-react';
 import {
   Dialog,
@@ -66,6 +67,8 @@ export function HireMeModal({
   const [form, setForm] = React.useState({ name: '', email: '' });
   const [status, setStatus] = React.useState<Status>('idle');
   const [error, setError] = React.useState('');
+  const [downloadUrl, setDownloadUrl] = React.useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = React.useState('');
 
   React.useEffect(() => {
     if (open) {
@@ -73,6 +76,8 @@ export function HireMeModal({
       setSelected(null);
       setStatus('idle');
       setError('');
+      setDownloadUrl(null);
+      setSuccessMessage('');
       setForm({ name: '', email: '' });
     }
   }, [open]);
@@ -98,6 +103,7 @@ export function HireMeModal({
     if (!form.name.trim() || !form.email.trim() || !selected) return;
     setStatus('sending');
     setError('');
+    const opt = RESUME_OPTIONS.find((o) => o.type === selected);
     try {
       const res = await fetch('/api/resume', {
         method: 'POST',
@@ -109,15 +115,21 @@ export function HireMeModal({
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send resume.');
+      if (!res.ok && !data.downloadUrl) {
+        throw new Error(data.error || 'Failed to process resume request.');
+      }
+      setDownloadUrl(data.downloadUrl || opt?.pdf || null);
+      setSuccessMessage(data.message || 'Resume request received!');
       setStatus('sent');
     } catch (err) {
       console.error('[hire-me] send failed:', err);
+      // Even if network fails, provide the fallback direct download
+      setDownloadUrl(opt?.pdf || null);
       setStatus('error');
       setError(
         err instanceof Error
           ? err.message
-          : 'Something went wrong. Please try again.'
+          : 'Unable to reach email service. You can download the resume directly below.'
       );
     }
   };
@@ -243,18 +255,44 @@ export function HireMeModal({
                   <DialogHeader
                     icon={<Mail className="h-5 w-5" />}
                     title={`Get ${selectedOption.label}`}
-                    description="Enter your name and email — I'll send it straight to your inbox."
+                    description="Enter your name and email — you can also download the PDF immediately."
                   />
 
                   {status === 'sent' ? (
-                    <div className="mt-6 flex flex-col items-center gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-8 text-center">
+                    <div className="mt-6 flex flex-col items-center gap-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-6 text-center">
                       <CheckCircle2 className="h-10 w-10 text-emerald-400" />
-                      <p className="font-display text-lg font-semibold">
-                        Resume sent!
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Check your inbox — it should arrive in a few minutes.
-                      </p>
+                      <div>
+                        <p className="font-display text-lg font-semibold text-foreground">
+                          {successMessage || 'Resume ready!'}
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          Thank you, {form.name.trim()}! You can download the {selectedOption.label} directly below.
+                        </p>
+                      </div>
+
+                      {downloadUrl && (
+                        <a
+                          href={downloadUrl}
+                          download={downloadUrl.split('/').pop()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-5 py-3 text-sm font-semibold text-background transition-transform hover:scale-[1.02]"
+                        >
+                          <Download className="h-4 w-4" />
+                          Download PDF Now
+                        </a>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStatus('idle');
+                          setStep('menu');
+                        }}
+                        className="mt-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        Back to options
+                      </button>
                     </div>
                   ) : (
                     <form
@@ -301,8 +339,20 @@ export function HireMeModal({
                       </div>
 
                       {status === 'error' && (
-                        <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                          {error}
+                        <div className="space-y-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive">
+                          <p>{error}</p>
+                          {downloadUrl && (
+                            <a
+                              href={downloadUrl}
+                              download={downloadUrl.split('/').pop()}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 font-semibold text-foreground underline underline-offset-4 hover:text-primary"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Download {selectedOption.label} PDF directly
+                            </a>
+                          )}
                         </div>
                       )}
 
@@ -315,7 +365,7 @@ export function HireMeModal({
                           {status === 'sending' ? (
                             <>
                               <Loader2 className="h-4 w-4 animate-spin" />
-                              Sending...
+                              Processing...
                             </>
                           ) : (
                             <>

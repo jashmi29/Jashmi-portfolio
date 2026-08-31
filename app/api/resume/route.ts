@@ -89,67 +89,104 @@ export async function POST(request: Request) {
   try {
     // Read the resume PDF from the public folder.
     const filePath = path.join(process.cwd(), 'public', 'resume', resume.file);
-    let attachment: Buffer;
+    const downloadUrl = `/resume/${resume.file}`;
+    let attachment: Buffer | null = null;
     try {
       attachment = await fs.readFile(filePath);
     } catch {
       console.error(`[resume] Missing resume file: ${filePath}`);
-      return NextResponse.json(
-        { error: 'The requested resume is temporarily unavailable.' },
-        { status: 500 }
-      );
     }
 
-    // 1. Send the resume to the visitor with a professional intro.
-    const delivery = await resend.emails.send({
-      from: `${'Jashmi KS'} <${FROM_EMAIL}>`,
-      to: [email],
-      replyTo: CONTACT_EMAIL,
-      subject: `Here's my ${resume.label} — Jashmi KS`,
-      html: resumeDeliveryHtml({ name, resumeLabel: resume.label }),
-      attachments: [{ filename: resume.filename, content: attachment }],
-    });
+    let visitorEmailSent = false;
+    let notificationEmailSent = false;
+    let resendNotice = '';
 
-    if (delivery.error) {
-      console.error('[resume] Delivery failed:', delivery.error);
-      throw new Error(delivery.error.message);
+    // 1. Notify Jashmi first (to CONTACT_EMAIL, which is guaranteed to succeed on Resend)
+    try {
+      const notification = await resend.emails.send({
+        from: `Jashmi Portfolio <${FROM_EMAIL}>`,
+        to: [CONTACT_EMAIL],
+        replyTo: email,
+        subject: `📬 Resume request: ${name} (${resume.label})`,
+        html: resumeRequestNotificationHtml({ name, email, resumeLabel: resume.label }),
+      });
+
+      if (notification.error) {
+        console.warn('[resume] Notification warning:', notification.error);
+      } else {
+        notificationEmailSent = true;
+      }
+    } catch (notifErr) {
+      console.warn('[resume] Notification error to owner:', notifErr);
     }
 
-    // 2. Notify Jashmi that someone requested the resume.
-    const notification = await resend.emails.send({
-      from: `${'Jashmi Portfolio'} <${FROM_EMAIL}>`,
-      to: [CONTACT_EMAIL],
-      replyTo: email,
-      subject: `📬 Resume request: ${name} (${resume.label})`,
-      html: resumeRequestNotificationHtml({ name, email, resumeLabel: resume.label }),
-    });
+    // 2. Attempt to send the resume to the visitor with attachment
+    if (attachment) {
+      try {
+        const delivery = await resend.emails.send({
+          from: `Jashmi KS <${FROM_EMAIL}>`,
+          to: [email],
+          replyTo: CONTACT_EMAIL,
+          subject: `Here's my ${resume.label} — Jashmi KS`,
+          html: resumeDeliveryHtml({ name, resumeLabel: resume.label }),
+          attachments: [{ filename: resume.filename, content: attachment }],
+        });
 
-    if (notification.error) {
-      console.error('[resume] Notification failed:', notification.error);
-      throw new Error(notification.error.message);
+        if (delivery.error) {
+          console.warn('[resume] Visitor delivery warning (likely Resend sandbox restriction for external domains):', delivery.error);
+          resendNotice = delivery.error.message || 'Direct email delivery restricted by email provider';
+        } else {
+          visitorEmailSent = true;
+        }
+      } catch (deliveryErr) {
+        console.warn('[resume] Visitor delivery exception:', deliveryErr);
+        resendNotice = deliveryErr instanceof Error ? deliveryErr.message : 'Email delivery failed';
+      }
     }
 
-    // 3. Record the interaction locally after the email is successfully sent.
-    await trackInteraction({
-      name,
-      email,
-      type:
-        resumeType === 'uiux' ? 'email_resume_uiux' : 'email_resume_fullstack',
-      resumeType: resumeType as ResumeType,
-      ipAddress: getClientIp(request),
-      userAgent: getUserAgent(request),
-      referrer: getReferrer(request),
-    });
+    // 3. Record the interaction locally (best-effort, non-blocking)
+    try {
+      await trackInteraction({
+        name,
+        email,
+        type:
+          resumeType === 'uiux' ? 'email_resume_uiux' : 'email_resume_fullstack',
+        resumeType: resumeType as ResumeType,
+        ipAddress: getClientIp(request),
+        userAgent: getUserAgent(request),
+        referrer: getReferrer(request),
+      });
+    } catch (trackErr) {
+      console.warn('[resume] Interaction tracking error:', trackErr);
+    }
 
     return NextResponse.json(
-      { ok: true, message: 'Resume sent! Check your inbox.' },
+      {
+        ok: true,
+        message: visitorEmailSent
+          ? 'Resume sent to your inbox!'
+          : 'Resume request received! You can also download it directly.',
+        downloadUrl,
+        filename: resume.filename,
+        visitorEmailSent,
+        notificationEmailSent,
+        notice: resendNotice || undefined,
+      },
       { status: 200 }
     );
   } catch (err) {
-    console.error('[resume] Send failed:', err);
+    console.error('[resume] Request handler error:', err);
+    // Even in an unexpected error, return the download URL so the visitor is never blocked
+    const fallbackDownloadUrl = `/resume/${resume.file}`;
     return NextResponse.json(
-      { error: 'Something went wrong sending the resume. Please try again.' },
-      { status: 500 }
+      {
+        ok: true,
+        message: 'Resume ready for direct download.',
+        downloadUrl: fallbackDownloadUrl,
+        filename: resume.filename,
+        visitorEmailSent: false,
+      },
+      { status: 200 }
     );
   }
 }
